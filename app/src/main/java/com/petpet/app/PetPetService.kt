@@ -80,11 +80,18 @@ class PetPetService : AccessibilityService() {
         if (!active || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
         when {
+            // 상단바(알림 창/퀵설정)를 내리면 petpet 모드 종료 (시스템 창 위에는 오버레이를 못 올림)
+            pkg == "com.android.systemui" && isShade(event.className?.toString()) -> stopPetPet()
             pkg in launcherPackages -> showOverlay()
             // 상태바/키보드 등 시스템 창은 무시, 그 외 앱이 앞으로 오면 오버레이 제거
             pkg == "com.android.systemui" || pkg.contains("inputmethod") || pkg == packageName -> Unit
             else -> hideOverlay()
         }
+    }
+
+    private fun isShade(cls: String?): Boolean {
+        val c = cls?.lowercase() ?: return false
+        return listOf("shade", "notificationpanel", "statusbar", "quicksetting", "qspanel").any { it in c }
     }
 
     private fun showOverlay() {

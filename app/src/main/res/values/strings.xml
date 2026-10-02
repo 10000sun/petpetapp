@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">petpet</string>
+    <string name="service_description">petpet 모드 중 홈 화면에서 앱 아이콘을 누르면 앱이 실행되는 대신 쓰다듬는 애니메이션을 보여줍니다.</string>
+</resources>

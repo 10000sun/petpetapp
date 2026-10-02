@@ -2,6 +2,7 @@ package com.petpet.app
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.os.Build
@@ -47,6 +48,25 @@ class MainActivity : Activity() {
             addView(petpet, LinearLayout.LayoutParams(-1, -2).apply { topMargin = gap })
             addView(done, LinearLayout.LayoutParams(-1, -2).apply { topMargin = gap })
         })
+        showIntroOnce()
+    }
+
+    private fun showIntroOnce() {
+        val prefs = getSharedPreferences("petpet", MODE_PRIVATE)
+        if (prefs.getBoolean("intro_seen", false)) return
+        AlertDialog.Builder(this)
+            .setTitle("petpet 사용 안내")
+            .setMessage(
+                "• petpet 버튼을 누르면 홈 화면으로 이동하고 petpet 모드가 시작돼요.\n\n" +
+                "• 모드 중 홈 화면의 앱 아이콘을 누르면 앱이 실행되지 않고 손이 쓰다듬어 줘요.\n\n" +
+                "• 스와이프(페이지 넘기기, 전체 앱 열기)는 그대로 동작해요.\n\n" +
+                "• petpet 앱 아이콘은 눌러도 정상 실행돼요.\n\n" +
+                "• 상단바를 내리면 모드가 자동으로 꺼져요. 앱의 done 버튼이나 알림의 done으로도 끌 수 있어요.\n\n" +
+                "• 처음 한 번, 접근성 설정에서 petpet 서비스를 켜야 해요."
+            )
+            .setCancelable(false)
+            .setPositiveButton("확인") { _, _ -> prefs.edit().putBoolean("intro_seen", true).apply() }
+            .show()
     }
 
     override fun onResume() {

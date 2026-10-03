@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -39,37 +40,60 @@ class MainActivity : Activity() {
                 refresh()
             }
         }
-        val gap = (16 * resources.displayMetrics.density).toInt()
-        setContentView(LinearLayout(this).apply {
+        val d = resources.displayMetrics.density
+        val gap = (16 * d).toInt()
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(gap * 2, gap, gap * 2, gap)
             addView(status)
             addView(petpet, LinearLayout.LayoutParams(-1, -2).apply { topMargin = gap })
             addView(done, LinearLayout.LayoutParams(-1, -2).apply { topMargin = gap })
+        }
+        // 오른쪽 위 "?" 버튼: 도움말 다시 보기
+        val help = Button(this).apply {
+            text = "?"
+            textSize = 18f
+            minWidth = 0
+            minHeight = 0
+            setPadding(0, 0, 0, 0)
+            contentDescription = "도움말"
+            setOnClickListener { showHelp(firstRun = false) }
+        }
+        val size = (44 * d).toInt()
+        setContentView(FrameLayout(this).apply {
+            addView(content, FrameLayout.LayoutParams(-1, -1))
+            addView(help, FrameLayout.LayoutParams(size, size, Gravity.TOP or Gravity.END).apply {
+                setMargins(0, gap, gap, 0)
+            })
         })
-        showIntroOnce()
+
+        if (!getSharedPreferences("petpet", MODE_PRIVATE).getBoolean("intro_seen", false)) {
+            showHelp(firstRun = true)
+        }
     }
 
-    private fun showIntroOnce() {
-        val prefs = getSharedPreferences("petpet", MODE_PRIVATE)
-        if (prefs.getBoolean("intro_seen", false)) return
-        AlertDialog.Builder(this)
+    /** 처음 실행 시 자동으로, 이후엔 "?" 버튼으로 표시되는 사용 안내 팝업 */
+    private fun showHelp(firstRun: Boolean) {
+        val builder = AlertDialog.Builder(this)
             .setTitle("petpet 사용 안내")
             .setMessage(
                 "• petpet 버튼을 누르면 홈 화면으로 이동하고 petpet 모드가 시작돼요.\n\n" +
-                "• 모드 중 홈 화면의 앱 아이콘을 누르면 앱이 실행되지 않고 그 아이콘 위에서 손이 쓰다듬어 줘요.\n\n" +
+                "• 모드 중 홈 화면의 앱 아이콘이나 위젯을 누르면 실행되지 않고 그 위에서 손이 쓰다듬어 줘요.\n\n" +
                 "• 스와이프(페이지 넘기기, 전체 앱 열기)는 그대로 동작해요.\n\n" +
                 "• petpet 앱 아이콘은 눌러도 정상 실행돼요.\n\n" +
-                "• 상단바를 내리면 petpet 상태 알림이 보여요. 누르면 이 앱으로 돌아오고, 앱의 done 버튼이나 알림의 done으로 끌 수 있어요.\n\n" +
+                "• 상단바를 내리면 petpet 상태 알림(실행 중/꺼짐)이 보여요. 누르면 이 앱으로 돌아오고, 앱의 done 버튼이나 알림의 done으로 끌 수 있어요.\n\n" +
                 "• 처음 한 번, 접근성 설정에서 petpet 서비스를 켜야 해요."
             )
-            .setCancelable(false)
-            .setPositiveButton("확인") { _, _ ->
-                prefs.edit().putBoolean("intro_seen", true).apply()
+        if (firstRun) {
+            builder.setCancelable(false).setPositiveButton("확인") { _, _ ->
+                getSharedPreferences("petpet", MODE_PRIVATE).edit().putBoolean("intro_seen", true).apply()
                 requestNotificationPermission()
             }
-            .show()
+        } else {
+            builder.setPositiveButton("닫기", null)
+        }
+        builder.show()
     }
 
     override fun onPause() {

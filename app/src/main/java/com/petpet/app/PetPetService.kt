@@ -16,6 +16,7 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.WindowManager
 import android.widget.Toast
 import java.util.concurrent.ExecutorService
@@ -41,6 +42,8 @@ class PetPetService : AccessibilityService() {
     private var overlay: PetOverlayView? = null
     private var overlayParams: WindowManager.LayoutParams? = null
     private var launcherPackages: Set<String> = emptySet()
+    // 모드 시작 직후(홈으로 나가는 중)에는 늦게 도착한 이벤트로 오버레이가 내려가지 않도록 유예
+    @Volatile private var graceUntil = 0L
 
     private val doneReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) = stopPetPet()
@@ -86,11 +89,12 @@ class PetPetService : AccessibilityService() {
             .queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)
             .map { it.activityInfo.packageName }.toSet()
         active = true
+        graceUntil = SystemClock.uptimeMillis() + 1500
         updateNotification()
         toast("petpet 모드가 켜졌어요")
         // 홈으로 나가자마자 첫 탭부터 막히도록 즉시 오버레이를 올리고, 런처가 앞에 오면 재확인
         showOverlay()
-        listOf(300L, 800L, 1500L).forEach { delay ->
+        listOf(300L, 800L, 1500L, 2500L).forEach { delay ->
             handler.postDelayed({
                 if (active && rootInActiveWindow?.packageName?.toString() in launcherPackages) showOverlay()
             }, delay)
@@ -120,8 +124,10 @@ class PetPetService : AccessibilityService() {
             pkg in launcherPackages -> showOverlay()
             // 시스템UI(상단바 등)/키보드 창은 무시 — 모드는 그대로 유지
             pkg == "com.android.systemui" || pkg.contains("inputmethod") -> Unit
-            // petpet 앱이나 다른 앱/화면(구글 피드 등)이 앞이면 터치를 막지 않도록 오버레이만 내림 (모드는 유지)
-            else -> hideOverlay()
+            // petpet 앱이 실제로 앞에 있을 때만 오버레이를 내림 (done 버튼을 누를 수 있게). 늦게 도착한 이벤트는 무시
+            pkg == packageName -> if (MainActivity.resumed) hideOverlay()
+            // 다른 앱/화면(구글 피드 등)이 앞이면 터치를 막지 않도록 오버레이만 내림 (모드는 유지)
+            else -> if (SystemClock.uptimeMillis() > graceUntil) hideOverlay()
         }
     }
 
@@ -228,6 +234,9 @@ class PetPetService : AccessibilityService() {
 
     private fun findHit(x: Float, y: Float): IconHit? {
         val root = rootInActiveWindow ?: return null
+        // 런처/상단바가 아닌 창(예: 아직 전환 중인 petpet 앱 화면)을 기준으로 판단하면 엉뚱한 탭이 통과될 수 있으므로 무시
+        val rootPkg = root.packageName?.toString()
+        if (rootPkg != "com.android.systemui" && rootPkg !in launcherPackages) return null
         val px = x.toInt()
         val py = y.toInt()
         val dm = resources.displayMetrics

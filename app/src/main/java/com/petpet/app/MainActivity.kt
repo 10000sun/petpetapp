@@ -73,12 +73,14 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        resumed = false
         PetPetService.onStateChanged = null
         super.onPause()
     }
 
     override fun onResume() {
         super.onResume()
+        resumed = true
         PetPetService.instance?.hideOverlay()
         PetPetService.onStateChanged = { runOnUiThread { refresh() } }
         refresh()
@@ -111,5 +113,10 @@ class MainActivity : Activity() {
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
+    }
+
+    companion object {
+        /** petpet 앱 화면이 실제로 앞에 있는지 (서비스가 오버레이 내림 여부를 판단할 때 사용) */
+        @Volatile var resumed = false
     }
 }

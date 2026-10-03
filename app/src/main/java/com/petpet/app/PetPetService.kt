@@ -45,20 +45,27 @@ class PetPetService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        updateNotification()
         val filter = IntentFilter(ACTION_DONE)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(doneReceiver, filter, RECEIVER_NOT_EXPORTED)
         else registerReceiver(doneReceiver, filter)
     }
 
+    private fun shutdown() {
+        active = false
+        hideOverlay()
+        getSystemService(NotificationManager::class.java).cancel(NOTIF_ID)
+    }
+
     override fun onDestroy() {
-        stopPetPet()
+        shutdown()
         runCatching { unregisterReceiver(doneReceiver) }
         if (instance === this) instance = null
         super.onDestroy()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
-        stopPetPet()
+        shutdown()
         if (instance === this) instance = null
         return super.onUnbind(intent)
     }
@@ -70,7 +77,7 @@ class PetPetService : AccessibilityService() {
             .queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)
             .map { it.activityInfo.packageName }.toSet()
         active = true
-        showNotification()
+        updateNotification()
         // 홈으로 나가자마자 첫 탭부터 막히도록 즉시 오버레이를 올리고, 런처가 앞에 오면 재확인
         showOverlay()
         listOf(300L, 800L, 1500L).forEach { delay ->
@@ -85,7 +92,7 @@ class PetPetService : AccessibilityService() {
         val was = active
         active = false
         hideOverlay()
-        getSystemService(NotificationManager::class.java).cancel(NOTIF_ID)
+        updateNotification()
         if (was) {
             Toast.makeText(this, "petpet 모드가 꺼졌어요", Toast.LENGTH_SHORT).show()
             onStateChanged?.invoke()
@@ -96,21 +103,12 @@ class PetPetService : AccessibilityService() {
         if (!active || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
         when {
-            // 상단바(알림 창/퀵설정) 등 시스템UI 창이 열리면 petpet 모드 종료 (시스템 창 위에는 오버레이를 못 올림)
-            pkg == "com.android.systemui" -> if (!isIgnorableSystemUi(event)) stopPetPet()
             pkg in launcherPackages -> showOverlay()
-            // petpet 앱 화면에서는 done 버튼 등을 누를 수 있게 오버레이를 내림 (모드는 유지)
-            pkg == packageName -> hideOverlay()
-            pkg.contains("inputmethod") -> Unit
-            // 그 외 앱/화면(왼쪽 쓸어서 나오는 구글 피드, 실행된 앱 등)이 앞으로 오면 모드 종료
-            else -> stopPetPet()
+            // 시스템UI(상단바 등)/키보드 창은 무시 — 모드는 그대로 유지
+            pkg == "com.android.systemui" || pkg.contains("inputmethod") -> Unit
+            // petpet 앱이나 다른 앱/화면(구글 피드 등)이 앞이면 터치를 막지 않도록 오버레이만 내림 (모드는 유지)
+            else -> hideOverlay()
         }
-    }
-
-    /** 볼륨 패널/토스트 같은 가벼운 시스템UI 창은 종료 트리거에서 제외 */
-    private fun isIgnorableSystemUi(event: AccessibilityEvent): Boolean {
-        val text = (event.className.toString() + event.text + event.contentDescription).lowercase()
-        return listOf("volume", "toast", "inputmethod").any { it in text }
     }
 
     private fun showOverlay() {
@@ -218,27 +216,28 @@ class PetPetService : AccessibilityService() {
         IconHit(bounds, own)
     }.getOrNull()
 
-    private fun showNotification() {
+    /** 상단바 알림: 현재 petpet 모드 상태를 보여주고, 누르면 petpet 앱으로 돌아간다. */
+    private fun updateNotification() {
         val nm = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL, "petpet", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL, "petpet", NotificationManager.IMPORTANCE_LOW)
+        )
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), flags)
-        val done = PendingIntent.getBroadcast(
-            this, 1, Intent(ACTION_DONE).setPackage(packageName), flags
-        )
-        val n = Notification.Builder(this, CHANNEL)
+        val b = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle("petpet 모드 실행 중")
-            .setContentText("눌러서 앱을 열거나 done으로 끌 수 있어요")
+            .setContentTitle(if (active) "petpet 모드 실행 중" else "petpet 모드 꺼짐")
+            .setContentText("눌러서 petpet 앱으로 돌아가기")
             .setContentIntent(open)
-            .addAction(Notification.Action.Builder(null, "done", done).build())
             .setOngoing(true)
-            .build()
-        nm.notify(NOTIF_ID, n)
+            .setOnlyAlertOnce(true)
+        if (active) {
+            val done = PendingIntent.getBroadcast(
+                this, 1, Intent(ACTION_DONE).setPackage(packageName), flags
+            )
+            b.addAction(Notification.Action.Builder(null, "done", done).build())
+        }
+        nm.notify(NOTIF_ID, b.build())
     }
 
     companion object {

@@ -176,10 +176,28 @@ class PetPetService : AccessibilityService() {
         val maxW = (160 * dm.density).toInt()
         val maxH = (190 * dm.density).toInt()
         val screenArea = dm.widthPixels.toLong() * dm.heightPixels
+        val r = Rect()
+
+        // petpet 자신의 아이콘/상단바 알림이면 탭을 그대로 통과 (앱으로 돌아올 수 있도록).
+        // 라벨 노드에서 가장 가까운 클릭 가능한 조상까지 올라가며 탭 위치를 포함하는지 확인
+        val own = root.findAccessibilityNodeInfosByText(getString(R.string.app_name)).any { node ->
+            var cur: AccessibilityNodeInfo? = node
+            var hit = false
+            var depth = 0
+            while (cur != null && depth < 6) {
+                cur.getBoundsInScreen(r)
+                if (r.contains(px, py) && r.width().toLong() * r.height() < screenArea / 3) hit = true
+                if (cur.isClickable) break
+                cur = cur.parent
+                depth++
+            }
+            hit
+        }
+        if (own) return IconHit(Rect(px, py, px, py), true)
+
         var icon: Rect? = null
         var widget: Rect? = null
         var bigLabeled: Rect? = null // 위젯 호스트 뷰가 노출되지 않는 런처용 보조 후보
-        val r = Rect()
 
         fun smaller(a: Rect, b: Rect?) = b == null || a.width().toLong() * a.height() < b.width().toLong() * b.height()
 
@@ -204,21 +222,7 @@ class PetPetService : AccessibilityService() {
         if (widgetBounds != null) return IconHit(widgetBounds, isOwn = false, isWidget = true)
         val bounds = icon ?: return null
 
-        // petpet 자신의 아이콘인지: 라벨 노드(또는 그 부모 몇 단계)가 탭 위치를 포함하는지
-        val label = getString(R.string.app_name)
-        val own = root.findAccessibilityNodeInfosByText(label).any { node ->
-            var cur: AccessibilityNodeInfo? = node
-            var hit = false
-            repeat(3) {
-                cur?.let { c ->
-                    c.getBoundsInScreen(r)
-                    if (r.contains(px, py) && r.width() <= maxW && r.height() <= maxH) hit = true
-                    cur = c.parent
-                }
-            }
-            hit
-        }
-        IconHit(bounds, own)
+        IconHit(bounds, false)
     }.getOrNull()
 
     /** 상단바 알림: 현재 petpet 모드 상태를 보여주고, 누르면 petpet 앱으로 돌아간다. */

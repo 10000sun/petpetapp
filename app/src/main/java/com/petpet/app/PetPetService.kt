@@ -11,16 +11,18 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 
 /**
  * petpet 모드 중 홈(런처) 화면 위에 투명 오버레이를 띄워 터치를 가로챈다.
- * - 탭: 앱 실행 대신 쓰다듬기 애니메이션
+ * - 앱 아이콘 탭: 실행 대신 그 아이콘 위에만 쓰다듬는 손 애니메이션 (아이콘이 아닌 곳은 무시)
  * - 스와이프: 오버레이가 받은 제스처를 그대로 다시 재생해 런처에 전달
  * - petpet 앱 자신의 아이콘: 탭을 그대로 통과 (앱으로 돌아올 수 있도록)
  */
@@ -143,16 +145,45 @@ class PetPetService : AccessibilityService() {
         }, 40)
     }
 
-    /** (x, y) 위치에 petpet 앱 자신의 런처 아이콘이 있는지 확인한다. */
-    fun isOwnIcon(x: Float, y: Float): Boolean = runCatching {
-        val label = getString(R.string.app_name)
-        val root = rootInActiveWindow ?: return false
-        root.findAccessibilityNodeInfosByText(label).any { node ->
-            val r = android.graphics.Rect()
-            node.getBoundsInScreen(r)
-            r.contains(x.toInt(), y.toInt())
+    class IconHit(val bounds: Rect, val isOwn: Boolean)
+
+    /** (x, y) 위치의 앱 아이콘(클릭 가능한 작은 노드)을 찾는다. 아이콘이 아니면 null. */
+    fun hitIcon(x: Float, y: Float): IconHit? = runCatching {
+        val root = rootInActiveWindow ?: return null
+        val px = x.toInt()
+        val py = y.toInt()
+        val maxW = (160 * resources.displayMetrics.density).toInt()
+        val maxH = (190 * resources.displayMetrics.density).toInt()
+        var best: Rect? = null
+        val r = Rect()
+
+        fun walk(n: AccessibilityNodeInfo) {
+            n.getBoundsInScreen(r)
+            if (!r.contains(px, py)) return
+            if ((n.isClickable || n.isLongClickable) && r.width() in 1..maxW && r.height() in 1..maxH) {
+                if (best == null || r.width() * r.height() < best!!.width() * best!!.height()) best = Rect(r)
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it) }
         }
-    }.getOrDefault(false)
+        walk(root)
+        val bounds = best ?: return null
+
+        // petpet 자신의 아이콘인지: 라벨 노드(또는 그 부모 몇 단계)가 탭 위치를 포함하는지
+        val label = getString(R.string.app_name)
+        val own = root.findAccessibilityNodeInfosByText(label).any { node ->
+            var cur: AccessibilityNodeInfo? = node
+            var hit = false
+            repeat(3) {
+                cur?.let { c ->
+                    c.getBoundsInScreen(r)
+                    if (r.contains(px, py) && r.width() <= maxW && r.height() <= maxH) hit = true
+                    cur = c.parent
+                }
+            }
+            hit
+        }
+        IconHit(bounds, own)
+    }.getOrNull()
 
     private fun showNotification() {
         val nm = getSystemService(NotificationManager::class.java)

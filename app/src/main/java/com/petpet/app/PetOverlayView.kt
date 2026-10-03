@@ -1,30 +1,39 @@
 package com.petpet.app
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
-import kotlin.math.PI
-import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sin
 
-/** 전체 화면 투명 뷰: 모든 터치를 받아 탭이면 쓰다듬기, 스와이프면 아래 창으로 재생한다. */
+/**
+ * 전체 화면 투명 뷰: 모든 터치를 받아
+ * - 스와이프 → 아래 창(런처)에 재생
+ * - petpet 앱 아이콘 탭 → 통과
+ * - 다른 앱 아이콘 탭 → 그 아이콘 위에만 쓰다듬는 손 애니메이션
+ * - 아이콘이 아닌 곳 탭 → 무시
+ */
 class PetOverlayView(private val service: PetPetService) : View(service) {
 
-    private class Pet(val x: Float, val y: Float, val start: Long)
+    private class Pet(val bounds: Rect, val start: Long)
 
     private val pets = mutableListOf<Pet>()
     private val d = resources.displayMetrics.density
     private val slop = ViewConfiguration.get(service).scaledTouchSlop.toFloat()
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val rect = RectF()
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val src = Rect()
+    private val dst = RectF()
+    private val loc = IntArray(2)
+    private val frames = loadFrames(service)
 
     private var downX = 0f
     private var downY = 0f
@@ -42,95 +51,59 @@ class PetOverlayView(private val service: PetPetService) : View(service) {
             MotionEvent.ACTION_UP -> {
                 if (moved) {
                     service.replay(downX, downY, e.rawX, e.rawY, e.eventTime - downTime)
-                } else if (service.isOwnIcon(downX, downY)) {
-                    service.replay(downX, downY, downX, downY, 40)
                 } else {
-                    pet(e.x, e.y)
+                    val hit = service.hitIcon(downX, downY)
+                    when {
+                        hit == null -> Unit
+                        hit.isOwn -> service.replay(downX, downY, downX, downY, 40)
+                        else -> pet(hit.bounds)
+                    }
                 }
             }
         }
         return true
     }
 
-    private fun pet(x: Float, y: Float) {
-        pets += Pet(x, y, SystemClock.uptimeMillis())
+    private fun pet(bounds: Rect) {
+        pets += Pet(bounds, SystemClock.uptimeMillis())
         postInvalidateOnAnimation()
     }
 
     override fun onDraw(canvas: Canvas) {
         val now = SystemClock.uptimeMillis()
-        pets.removeAll { now - it.start > DURATION }
-        for (p in pets) drawPet(canvas, p, (now - p.start) / DURATION.toFloat())
+        pets.removeAll { now - it.start >= DURATION }
+        getLocationOnScreen(loc)
+        for (p in pets) drawPet(canvas, p, now - p.start)
         if (pets.isNotEmpty()) postInvalidateOnAnimation()
     }
 
-    /** t: 0..1. 손이 3번 톡톡톡 내려오며 쓰다듬고, 눌릴 때 납작해지며 하트가 떠오른다. */
-    private fun drawPet(c: Canvas, p: Pet, t: Float) {
-        val s = 56 * d
-        val press = 0.5f - 0.5f * cos(t * 3 * 2 * PI.toFloat()) // 0(위)→1(눌림), 3회
-        val squash = press * press * press
-        val alpha = (min(1f, t / 0.1f) * min(1f, (1f - t) / 0.15f)).coerceIn(0f, 1f)
-
-        // 눌리는 지점 그림자/물결
-        paint.style = Paint.Style.FILL
-        paint.color = 0xFFFF6F91.toInt()
-        paint.alpha = (90 * alpha * press).toInt()
-        val rx = s * (0.55f + 0.2f * squash)
-        rect.set(p.x - rx, p.y + s * 0.1f - s * 0.12f * (1 - squash), p.x + rx, p.y + s * 0.1f + s * 0.12f)
-        c.drawOval(rect, paint)
-
-        // 손
-        val cy = p.y - s * (0.55f + 0.55f * (1f - press))
-        c.save()
-        c.translate(p.x, cy)
-        c.scale(1f + 0.12f * squash, 1f - 0.18f * squash)
-        drawHand(c, s, alpha)
-        c.restore()
-
-        // 하트
-        if (t > 0.45f) {
-            val ht = (t - 0.45f) / 0.55f
-            paint.style = Paint.Style.FILL
-            paint.textAlign = Paint.Align.CENTER
-            paint.textSize = s * 0.45f
-            paint.color = 0xFFFF4D79.toInt()
-            for (i in 0..2) {
-                val k = max(0f, ht - i * 0.12f)
-                paint.alpha = (255 * alpha * (1f - k)).toInt().coerceIn(0, 255)
-                val hx = p.x + (i - 1) * s * 0.55f + sin(k * 6 + i) * s * 0.1f
-                val hy = p.y - s * 0.6f - k * s * 1.1f
-                c.drawText("♥", hx, hy, paint)
-            }
-        }
-    }
-
-    private fun drawHand(c: Canvas, s: Float, alpha: Float) {
-        val fill = 0xFFFFD3A8.toInt()
-        val line = 0xFFD99A62.toInt()
-        fun shape(l: Float, t: Float, r: Float, b: Float, rad: Float) {
-            rect.set(l * s, t * s, r * s, b * s)
-            paint.style = Paint.Style.FILL; paint.color = fill; paint.alpha = (255 * alpha).toInt()
-            c.drawRoundRect(rect, rad * s, rad * s, paint)
-            paint.style = Paint.Style.STROKE; paint.strokeWidth = 0.035f * s
-            paint.color = line; paint.alpha = (255 * alpha).toInt()
-            c.drawRoundRect(rect, rad * s, rad * s, paint)
-        }
-        // 손가락 4개(아래를 향함)
-        val tips = floatArrayOf(0.55f, 0.7f, 0.66f, 0.5f)
-        for (i in 0..3) {
-            val cx = -0.39f + i * 0.26f
-            shape(cx - 0.12f, 0.0f, cx + 0.12f, tips[i], 0.12f)
-        }
-        // 엄지
-        c.save()
-        c.rotate(-35f, 0.5f * s, -0.05f * s)
-        shape(0.42f, -0.17f, 0.95f, 0.07f, 0.12f)
-        c.restore()
-        // 손바닥
-        shape(-0.55f, -0.5f, 0.55f, 0.2f, 0.3f)
+    private fun drawPet(c: Canvas, p: Pet, elapsed: Long) {
+        val frame = frames[min((elapsed / FRAME_MS).toInt(), frames.size - 1)]
+        val w = min(p.bounds.width(), p.bounds.height()).toFloat()
+        val size = (w * HAND_SCALE).coerceIn(56 * d, 200 * d)
+        // 아이콘 이미지 중심(라벨 제외) 기준으로 손을 배치
+        val cx = p.bounds.exactCenterX() - loc[0]
+        val cy = p.bounds.top + w / 2f - loc[1]
+        dst.set(cx - size * ANCHOR_X, cy - size * ANCHOR_Y, cx + size * (1 - ANCHOR_X), cy + size * (1 - ANCHOR_Y))
+        src.set(0, 0, frame.width, frame.height)
+        val fadeIn = min(1f, elapsed / 80f)
+        val fadeOut = min(1f, (DURATION - elapsed) / 100f)
+        paint.alpha = (255 * max(0f, min(fadeIn, fadeOut))).toInt()
+        c.drawBitmap(frame, src, dst, paint)
     }
 
     private companion object {
-        const val DURATION = 1100L
+        const val FRAME_MS = 100L
+        const val DURATION = 11 * FRAME_MS
+        const val HAND_SCALE = 1.7f   // 손 크기 = 아이콘 너비 × 이 값
+        const val ANCHOR_X = 0.5f     // 아이콘 중심이 움짤 프레임의 (x, y) 비율 위치에 오도록
+        const val ANCHOR_Y = 0.68f
+
+        private var cache: List<Bitmap>? = null
+
+        fun loadFrames(ctx: Context): List<Bitmap> = cache ?: List(11) { i ->
+            val id = ctx.resources.getIdentifier("petpet_hand_%02d".format(i), "drawable", ctx.packageName)
+            BitmapFactory.decodeResource(ctx.resources, id)
+        }.also { cache = it }
     }
 }

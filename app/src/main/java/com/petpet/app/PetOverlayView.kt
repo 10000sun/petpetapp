@@ -53,11 +53,14 @@ class PetOverlayView(private val service: PetPetService) : View(service) {
                 if (moved) {
                     service.replay(downX, downY, e.rawX, e.rawY, e.eventTime - downTime)
                 } else {
-                    val hit = service.hitIcon(downX, downY)
-                    when {
-                        hit == null -> Unit
-                        hit.isOwn -> service.replay(downX, downY, downX, downY, 40)
-                        else -> pet(hit.bounds, hit.isWidget)
+                    val x = downX
+                    val y = downY
+                    service.hitIconAsync(x, y) { hit ->
+                        when {
+                            hit == null -> Unit
+                            hit.isOwn -> service.replay(x, y, x, y, 40)
+                            else -> pet(hit.bounds, hit.isWidget)
+                        }
                     }
                 }
             }
@@ -101,14 +104,14 @@ class PetOverlayView(private val service: PetPetService) : View(service) {
         c.drawBitmap(frame, src, dst, paint)
     }
 
-    private companion object {
-        const val FRAME_MS = 100L
-        const val DURATION = 11 * FRAME_MS
-        const val HAND_SCALE = 1.7f   // 손 크기 = 아이콘 너비 × 이 값
-        const val ANCHOR_X = 0.5f     // 아이콘 중심이 움짤 프레임의 (x, y) 비율 위치에 오도록
-        const val ANCHOR_Y = 0.68f
+    companion object {
+        private const val FRAME_MS = 100L
+        private const val DURATION = 11 * FRAME_MS
+        private const val HAND_SCALE = 1.7f   // 손 크기 = 아이콘 너비 × 이 값
+        private const val ANCHOR_X = 0.5f     // 아이콘 중심이 움짤 프레임의 (x, y) 비율 위치에 오도록
+        private const val ANCHOR_Y = 0.68f
 
-        private var cache: List<Bitmap>? = null
+        @Volatile private var cache: List<Bitmap>? = null
 
         fun loadFrames(ctx: Context): List<Bitmap> = cache ?: List(11) { i ->
             val id = ctx.resources.getIdentifier("petpet_hand_%02d".format(i), "drawable", ctx.packageName)

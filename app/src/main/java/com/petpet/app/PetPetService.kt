@@ -18,6 +18,8 @@ import android.os.Handler
 import android.os.Looper
 import android.view.WindowManager
 import android.widget.Toast
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -52,6 +54,7 @@ class PetPetService : AccessibilityService() {
     }
 
     private fun shutdown() {
+        runCatching { worker.shutdownNow() }
         active = false
         hideOverlay()
         getSystemService(NotificationManager::class.java).cancel(NOTIF_ID)
@@ -77,6 +80,7 @@ class PetPetService : AccessibilityService() {
             .queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)
             .map { it.activityInfo.packageName }.toSet()
         active = true
+        worker.execute { PetOverlayView.loadFrames(this) } // 첫 애니메이션 지연 방지용 프레임 미리 로드
         updateNotification()
         toast("petpet 모드가 켜졌어요")
         // 홈으로 나가자마자 첫 탭부터 막히도록 즉시 오버레이를 올리고, 런처가 앞에 오면 재확인
@@ -123,7 +127,7 @@ class PetPetService : AccessibilityService() {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT
         )
         runCatching { wm.addView(view, lp) }.onSuccess {
@@ -167,8 +171,22 @@ class PetPetService : AccessibilityService() {
 
     class IconHit(val bounds: Rect, val isOwn: Boolean, val isWidget: Boolean = false)
 
-    /** (x, y) 위치의 앱 아이콘(클릭 가능한 작은 노드) 또는 위젯을 찾는다. 둘 다 아니면 null. */
-    fun hitIcon(x: Float, y: Float): IconHit? = runCatching {
+    private val worker: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
+
+    /** 접근성 트리 탐색은 IPC라 느리므로 백그라운드에서 수행하고 결과만 메인 스레드로 돌려준다. */
+    fun hitIconAsync(x: Float, y: Float, callback: (IconHit?) -> Unit) {
+        worker.execute {
+            val hit = hitIcon(x, y)
+            handler.post { callback(hit) }
+        }
+    }
+
+    /**
+     * (x, y) 위치의 대상을 한 번의 트리 탐색으로 찾는다 (탭 위치를 포함하는 노드만 내려감).
+     * - petpet 자신의 아이콘/알림 → own
+     * - 위젯 → 위젯 전체, 앱 아이콘 → 가장 작은 클릭 가능 노드
+     */
+    private fun hitIcon(x: Float, y: Float): IconHit? = runCatching {
         val root = rootInActiveWindow ?: return null
         val px = x.toInt()
         val py = y.toInt()
@@ -176,52 +194,54 @@ class PetPetService : AccessibilityService() {
         val maxW = (160 * dm.density).toInt()
         val maxH = (190 * dm.density).toInt()
         val screenArea = dm.widthPixels.toLong() * dm.heightPixels
-        val r = Rect()
-
-        // petpet 자신의 아이콘/상단바 알림이면 탭을 그대로 통과 (앱으로 돌아올 수 있도록).
-        // 라벨 노드에서 가장 가까운 클릭 가능한 조상까지 올라가며 탭 위치를 포함하는지 확인
-        val own = root.findAccessibilityNodeInfosByText(getString(R.string.app_name)).any { node ->
-            var cur: AccessibilityNodeInfo? = node
-            var hit = false
-            var depth = 0
-            while (cur != null && depth < 6) {
-                cur.getBoundsInScreen(r)
-                if (r.contains(px, py) && r.width().toLong() * r.height() < screenArea / 3) hit = true
-                if (cur.isClickable) break
-                cur = cur.parent
-                depth++
-            }
-            hit
-        }
-        if (own) return IconHit(Rect(px, py, px, py), true)
-
+        val label = getString(R.string.app_name)
         var icon: Rect? = null
         var widget: Rect? = null
         var bigLabeled: Rect? = null // 위젯 호스트 뷰가 노출되지 않는 런처용 보조 후보
+        var own = false
 
         fun smaller(a: Rect, b: Rect?) = b == null || a.width().toLong() * a.height() < b.width().toLong() * b.height()
 
+        fun hasLabel(n: AccessibilityNodeInfo, depth: Int): Boolean {
+            if (n.text?.contains(label, true) == true || n.contentDescription?.contains(label, true) == true) return true
+            if (depth == 0) return false
+            for (i in 0 until n.childCount) {
+                val c = n.getChild(i) ?: continue
+                if (hasLabel(c, depth - 1)) return true
+            }
+            return false
+        }
+
         fun walk(n: AccessibilityNodeInfo) {
+            val r = Rect()
             n.getBoundsInScreen(r)
             if (!r.contains(px, py)) return
             val area = r.width().toLong() * r.height()
+            val clickable = n.isClickable || n.isLongClickable
+            if (clickable && area < screenArea / 3 && hasLabel(n, 3)) {
+                own = true // petpet 자신의 아이콘/알림 → 탭을 그대로 통과
+                return
+            }
             if (n.className?.contains("AppWidgetHostView") == true) {
-                if (smaller(r, widget)) widget = Rect(r)
-            } else if ((n.isClickable || n.isLongClickable) && r.width() in 1..maxW && r.height() in 1..maxH) {
-                if (smaller(r, icon)) icon = Rect(r)
+                if (smaller(r, widget)) widget = r
+            } else if (clickable && r.width() in 1..maxW && r.height() in 1..maxH) {
+                if (smaller(r, icon)) icon = r
             } else if ((r.width() > maxW || r.height() > maxH) && area < screenArea / 2 &&
                 !(n.contentDescription.isNullOrBlank() && n.text.isNullOrBlank())
             ) {
-                if (smaller(r, bigLabeled)) bigLabeled = Rect(r)
+                if (smaller(r, bigLabeled)) bigLabeled = r
             }
-            for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it) }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { walk(it) }
+                if (own) return
+            }
         }
         walk(root)
 
+        if (own) return IconHit(Rect(px, py, px, py), true)
         val widgetBounds = widget ?: if (icon == null) bigLabeled else null
         if (widgetBounds != null) return IconHit(widgetBounds, isOwn = false, isWidget = true)
         val bounds = icon ?: return null
-
         IconHit(bounds, false)
     }.getOrNull()
 

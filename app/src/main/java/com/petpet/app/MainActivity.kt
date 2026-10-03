@@ -71,6 +71,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        PetPetService.instance?.hideOverlay()
         refresh()
     }
 

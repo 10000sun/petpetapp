@@ -86,7 +86,9 @@ class PetPetService : AccessibilityService() {
             pkg == "com.android.systemui" && isShade(event.className?.toString()) -> stopPetPet()
             pkg in launcherPackages -> showOverlay()
             // 상태바/키보드 등 시스템 창은 무시, 그 외 앱이 앞으로 오면 오버레이 제거
-            pkg == "com.android.systemui" || pkg.contains("inputmethod") || pkg == packageName -> Unit
+            // petpet 앱 화면에서는 done 버튼 등을 누를 수 있게 오버레이를 내림 (모드는 유지)
+            pkg == packageName -> hideOverlay()
+            pkg == "com.android.systemui" || pkg.contains("inputmethod") -> Unit
             else -> hideOverlay()
         }
     }
@@ -112,7 +114,7 @@ class PetPetService : AccessibilityService() {
         }
     }
 
-    private fun hideOverlay() {
+    fun hideOverlay() {
         overlay?.let { runCatching { wm.removeView(it) } }
         overlay = null
         overlayParams = null

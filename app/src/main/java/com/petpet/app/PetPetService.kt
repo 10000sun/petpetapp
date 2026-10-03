@@ -78,6 +78,7 @@ class PetPetService : AccessibilityService() {
             .map { it.activityInfo.packageName }.toSet()
         active = true
         updateNotification()
+        toast("petpet 모드가 켜졌어요")
         // 홈으로 나가자마자 첫 탭부터 막히도록 즉시 오버레이를 올리고, 런처가 앞에 오면 재확인
         showOverlay()
         listOf(300L, 800L, 1500L).forEach { delay ->
@@ -88,13 +89,17 @@ class PetPetService : AccessibilityService() {
         onStateChanged?.invoke()
     }
 
+    private fun toast(msg: String) {
+        handler.post { Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show() }
+    }
+
     fun stopPetPet() {
         val was = active
         active = false
         hideOverlay()
         updateNotification()
         if (was) {
-            Toast.makeText(this, "petpet 모드가 꺼졌어요", Toast.LENGTH_SHORT).show()
+            toast("petpet 모드가 꺼졌어요")
             onStateChanged?.invoke()
         }
     }

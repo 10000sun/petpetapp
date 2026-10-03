@@ -102,8 +102,8 @@ class PetPetService : AccessibilityService() {
             // petpet 앱 화면에서는 done 버튼 등을 누를 수 있게 오버레이를 내림 (모드는 유지)
             pkg == packageName -> hideOverlay()
             pkg.contains("inputmethod") -> Unit
-            // 그 외 앱이 앞으로 오면 오버레이 제거
-            else -> hideOverlay()
+            // 그 외 앱/화면(왼쪽 쓸어서 나오는 구글 피드, 실행된 앱 등)이 앞으로 오면 모드 종료
+            else -> stopPetPet()
         }
     }
 

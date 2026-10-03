@@ -69,9 +69,15 @@ class MainActivity : Activity() {
             .show()
     }
 
+    override fun onPause() {
+        PetPetService.onStateChanged = null
+        super.onPause()
+    }
+
     override fun onResume() {
         super.onResume()
         PetPetService.instance?.hideOverlay()
+        PetPetService.onStateChanged = { runOnUiThread { refresh() } }
         refresh()
     }
 

@@ -24,11 +24,12 @@ import kotlin.math.min
  */
 class PetOverlayView(private val service: PetPetService) : View(service) {
 
-    private class Pet(val bounds: Rect, val start: Long)
+    private class Pet(val bounds: Rect, val widget: Boolean, val start: Long)
 
     private val pets = mutableListOf<Pet>()
     private val d = resources.displayMetrics.density
-    private val slop = ViewConfiguration.get(service).scaledTouchSlop.toFloat()
+    // 탭 중 손가락이 살짝 움직여도 스와이프로 재생(=위젯/아이콘이 눌림)되지 않도록 넉넉하게
+    private val slop = max(ViewConfiguration.get(service).scaledTouchSlop.toFloat(), 20 * d)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val src = Rect()
     private val dst = RectF()
@@ -56,7 +57,7 @@ class PetOverlayView(private val service: PetPetService) : View(service) {
                     when {
                         hit == null -> Unit
                         hit.isOwn -> service.replay(downX, downY, downX, downY, 40)
-                        else -> pet(hit.bounds)
+                        else -> pet(hit.bounds, hit.isWidget)
                     }
                 }
             }
@@ -64,8 +65,8 @@ class PetOverlayView(private val service: PetPetService) : View(service) {
         return true
     }
 
-    private fun pet(bounds: Rect) {
-        pets += Pet(bounds, SystemClock.uptimeMillis())
+    private fun pet(bounds: Rect, widget: Boolean) {
+        pets += Pet(bounds, widget, SystemClock.uptimeMillis())
         postInvalidateOnAnimation()
     }
 
@@ -80,10 +81,18 @@ class PetOverlayView(private val service: PetPetService) : View(service) {
     private fun drawPet(c: Canvas, p: Pet, elapsed: Long) {
         val frame = frames[min((elapsed / FRAME_MS).toInt(), frames.size - 1)]
         val w = min(p.bounds.width(), p.bounds.height()).toFloat()
-        val size = (w * HAND_SCALE).coerceIn(56 * d, 200 * d)
-        // 아이콘 이미지 중심(라벨 제외) 기준으로 손을 배치
+        val size: Float
         val cx = p.bounds.exactCenterX() - loc[0]
-        val cy = p.bounds.top + w / 2f - loc[1]
+        val cy: Float
+        if (p.widget) {
+            // 위젯: 위젯 전체 중심을 기준으로 큼직하게
+            size = (w * 0.9f).coerceIn(80 * d, 240 * d)
+            cy = p.bounds.exactCenterY() - loc[1]
+        } else {
+            size = (w * HAND_SCALE).coerceIn(56 * d, 200 * d)
+            // 아이콘 이미지 중심(라벨 제외) 기준
+            cy = p.bounds.top + w / 2f - loc[1]
+        }
         dst.set(cx - size * ANCHOR_X, cy - size * ANCHOR_Y, cx + size * (1 - ANCHOR_X), cy + size * (1 - ANCHOR_Y))
         src.set(0, 0, frame.width, frame.height)
         val fadeIn = min(1f, elapsed / 80f)

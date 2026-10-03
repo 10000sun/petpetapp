@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.WindowManager
+import android.widget.Toast
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -70,32 +71,46 @@ class PetPetService : AccessibilityService() {
             .map { it.activityInfo.packageName }.toSet()
         active = true
         showNotification()
+        // 홈으로 나가자마자 첫 탭부터 막히도록 즉시 오버레이를 올리고, 런처가 앞에 오면 재확인
+        showOverlay()
+        listOf(300L, 800L, 1500L).forEach { delay ->
+            handler.postDelayed({
+                if (active && rootInActiveWindow?.packageName?.toString() in launcherPackages) showOverlay()
+            }, delay)
+        }
+        onStateChanged?.invoke()
     }
 
     fun stopPetPet() {
+        val was = active
         active = false
         hideOverlay()
         getSystemService(NotificationManager::class.java).cancel(NOTIF_ID)
+        if (was) {
+            Toast.makeText(this, "petpet 모드가 꺼졌어요", Toast.LENGTH_SHORT).show()
+            onStateChanged?.invoke()
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (!active || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
         when {
-            // 상단바(알림 창/퀵설정)를 내리면 petpet 모드 종료 (시스템 창 위에는 오버레이를 못 올림)
-            pkg == "com.android.systemui" && isShade(event.className?.toString()) -> stopPetPet()
+            // 상단바(알림 창/퀵설정) 등 시스템UI 창이 열리면 petpet 모드 종료 (시스템 창 위에는 오버레이를 못 올림)
+            pkg == "com.android.systemui" -> if (!isIgnorableSystemUi(event)) stopPetPet()
             pkg in launcherPackages -> showOverlay()
-            // 상태바/키보드 등 시스템 창은 무시, 그 외 앱이 앞으로 오면 오버레이 제거
             // petpet 앱 화면에서는 done 버튼 등을 누를 수 있게 오버레이를 내림 (모드는 유지)
             pkg == packageName -> hideOverlay()
-            pkg == "com.android.systemui" || pkg.contains("inputmethod") -> Unit
+            pkg.contains("inputmethod") -> Unit
+            // 그 외 앱이 앞으로 오면 오버레이 제거
             else -> hideOverlay()
         }
     }
 
-    private fun isShade(cls: String?): Boolean {
-        val c = cls?.lowercase() ?: return false
-        return listOf("shade", "notificationpanel", "statusbar", "quicksetting", "qspanel").any { it in c }
+    /** 볼륨 패널/토스트 같은 가벼운 시스템UI 창은 종료 트리거에서 제외 */
+    private fun isIgnorableSystemUi(event: AccessibilityEvent): Boolean {
+        val text = (event.className.toString() + event.text + event.contentDescription).lowercase()
+        return listOf("volume", "toast", "inputmethod").any { it in text }
     }
 
     private fun showOverlay() {
@@ -147,28 +162,44 @@ class PetPetService : AccessibilityService() {
         }, 40)
     }
 
-    class IconHit(val bounds: Rect, val isOwn: Boolean)
+    class IconHit(val bounds: Rect, val isOwn: Boolean, val isWidget: Boolean = false)
 
-    /** (x, y) 위치의 앱 아이콘(클릭 가능한 작은 노드)을 찾는다. 아이콘이 아니면 null. */
+    /** (x, y) 위치의 앱 아이콘(클릭 가능한 작은 노드) 또는 위젯을 찾는다. 둘 다 아니면 null. */
     fun hitIcon(x: Float, y: Float): IconHit? = runCatching {
         val root = rootInActiveWindow ?: return null
         val px = x.toInt()
         val py = y.toInt()
-        val maxW = (160 * resources.displayMetrics.density).toInt()
-        val maxH = (190 * resources.displayMetrics.density).toInt()
-        var best: Rect? = null
+        val dm = resources.displayMetrics
+        val maxW = (160 * dm.density).toInt()
+        val maxH = (190 * dm.density).toInt()
+        val screenArea = dm.widthPixels.toLong() * dm.heightPixels
+        var icon: Rect? = null
+        var widget: Rect? = null
+        var bigLabeled: Rect? = null // 위젯 호스트 뷰가 노출되지 않는 런처용 보조 후보
         val r = Rect()
+
+        fun smaller(a: Rect, b: Rect?) = b == null || a.width().toLong() * a.height() < b.width().toLong() * b.height()
 
         fun walk(n: AccessibilityNodeInfo) {
             n.getBoundsInScreen(r)
             if (!r.contains(px, py)) return
-            if ((n.isClickable || n.isLongClickable) && r.width() in 1..maxW && r.height() in 1..maxH) {
-                if (best == null || r.width() * r.height() < best!!.width() * best!!.height()) best = Rect(r)
+            val area = r.width().toLong() * r.height()
+            if (n.className?.contains("AppWidgetHostView") == true) {
+                if (smaller(r, widget)) widget = Rect(r)
+            } else if ((n.isClickable || n.isLongClickable) && r.width() in 1..maxW && r.height() in 1..maxH) {
+                if (smaller(r, icon)) icon = Rect(r)
+            } else if ((r.width() > maxW || r.height() > maxH) && area < screenArea / 2 &&
+                !(n.contentDescription.isNullOrBlank() && n.text.isNullOrBlank())
+            ) {
+                if (smaller(r, bigLabeled)) bigLabeled = Rect(r)
             }
             for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it) }
         }
         walk(root)
-        val bounds = best ?: return null
+
+        val widgetBounds = widget ?: if (icon == null) bigLabeled else null
+        if (widgetBounds != null) return IconHit(widgetBounds, isOwn = false, isWidget = true)
+        val bounds = icon ?: return null
 
         // petpet 자신의 아이콘인지: 라벨 노드(또는 그 부모 몇 단계)가 탭 위치를 포함하는지
         val label = getString(R.string.app_name)
@@ -212,6 +243,7 @@ class PetPetService : AccessibilityService() {
 
     companion object {
         var instance: PetPetService? = null
+        var onStateChanged: (() -> Unit)? = null
         private const val ACTION_DONE = "com.petpet.app.DONE"
         private const val CHANNEL = "petpet"
         private const val NOTIF_ID = 1

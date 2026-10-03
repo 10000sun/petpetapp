@@ -56,6 +56,7 @@ class PetOverlayView(private val service: PetPetService) : View(service) {
                     val x = downX
                     val y = downY
                     service.hitIconAsync(x, y) { hit ->
+                        if (!isAttachedToWindow) return@hitIconAsync // 그 사이 오버레이가 내려갔으면 무시
                         when {
                             hit == null -> Unit
                             hit.isOwn -> service.replay(x, y, x, y, 40)
@@ -113,6 +114,8 @@ class PetOverlayView(private val service: PetPetService) : View(service) {
 
         @Volatile private var cache: List<Bitmap>? = null
 
+        /** 중복 디코딩을 막기 위해 동기화 (서비스 연결 시 백그라운드 선로딩 ↔ 오버레이 생성) */
+        @Synchronized
         fun loadFrames(ctx: Context): List<Bitmap> = cache ?: List(11) { i ->
             val id = ctx.resources.getIdentifier("petpet_hand_%02d".format(i), "drawable", ctx.packageName)
             BitmapFactory.decodeResource(ctx.resources, id)

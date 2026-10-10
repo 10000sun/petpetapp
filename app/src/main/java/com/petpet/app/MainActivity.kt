@@ -13,11 +13,11 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
 
 class MainActivity : Activity() {
 
     private lateinit var status: TextView
+    private lateinit var adContainer: FrameLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,8 +61,21 @@ class MainActivity : Activity() {
             setOnClickListener { showHelp(firstRun = false) }
         }
         val size = (44 * d).toInt()
+        // ── 광고 영역 ── 앱 메인 화면 하단에만 둔다 (오버레이/알림/다른 앱 위 금지, 버튼과 간격 유지).
+        // 광고 SDK(AdMob 등)를 붙일 때 이 컨테이너에 AdView를 addView 한다.
+        val adHeight = (60 * d).toInt()
+        adContainer = FrameLayout(this).apply {
+            setBackgroundColor(0xFFF2F2F2.toInt())
+            addView(TextView(context).apply {
+                text = "광고 영역"
+                gravity = Gravity.CENTER
+                setTextColor(Color.GRAY)
+            }, FrameLayout.LayoutParams(-1, -1))
+        }
+        content.setPadding(gap * 2, gap, gap * 2, gap + adHeight + gap)
         setContentView(FrameLayout(this).apply {
             addView(content, FrameLayout.LayoutParams(-1, -1))
+            addView(adContainer, FrameLayout.LayoutParams(-1, adHeight, Gravity.BOTTOM))
             addView(help, FrameLayout.LayoutParams(size, size, Gravity.TOP or Gravity.END).apply {
                 setMargins(0, gap, gap, 0)
             })
@@ -122,8 +135,22 @@ class MainActivity : Activity() {
     private fun startPetPet() {
         val svc = PetPetService.instance
         if (svc == null) {
-            Toast.makeText(this, "접근성에서 petpet 서비스를 켜주세요", Toast.LENGTH_LONG).show()
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            // Play 정책: 접근성 권한 사용 목적을 명확히 고지하고 동의를 받은 뒤에만 설정으로 보낸다
+            AlertDialog.Builder(this)
+                .setTitle("접근성 서비스 사용 동의")
+                .setMessage(
+                    "petpet은 접근성 서비스를 사용해 홈 화면 위에 투명한 화면을 띄우고, 앱 아이콘/위젯을 누를 때 " +
+                    "쓰다듬는 효과를 보여줍니다.\n\n" +
+                    "• 터치한 위치의 아이콘 이름과 위치를 읽습니다.\n" +
+                    "• 이 정보는 기기 안에서만 쓰이며 저장하거나 외부로 전송하지 않습니다.\n" +
+                    "• 광고에는 사용하지 않습니다.\n\n" +
+                    "동의하시면 접근성 설정으로 이동합니다. 설정에서 petpet을 켜주세요."
+                )
+                .setPositiveButton("동의하고 이동") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
+                .setNegativeButton("취소", null)
+                .show()
             return
         }
         requestNotificationPermission()

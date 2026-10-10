@@ -294,7 +294,7 @@ class PetPetService : AccessibilityService() {
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), flags)
         val b = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(if (active) "petpet 모드 실행 중" else "petpet 모드 꺼짐")
             .setContentText("눌러서 petpet 앱으로 돌아가기")
             .setContentIntent(open)

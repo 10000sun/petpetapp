@@ -13,11 +13,23 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.net.Uri
+import android.view.View
+import android.view.WindowInsets
+import com.google.android.gms.ads.AdListener
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.AdSize
+import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.LoadAdError
+import com.google.android.gms.ads.MobileAds
+import com.google.android.ump.ConsentRequestParameters
+import com.google.android.ump.UserMessagingPlatform
 
 class MainActivity : Activity() {
 
     private lateinit var status: TextView
     private lateinit var adContainer: FrameLayout
+    private var adView: AdView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,18 +74,14 @@ class MainActivity : Activity() {
         }
         val size = (44 * d).toInt()
         // ── 광고 영역 ── 앱 메인 화면 하단에만 둔다 (오버레이/알림/다른 앱 위 금지, 버튼과 간격 유지).
-        // 광고 SDK(AdMob 등)를 붙일 때 이 컨테이너에 AdView를 addView 한다.
+        // 광고가 로드되기 전/실패 시에는 숨긴다.
         val adHeight = (60 * d).toInt()
-        adContainer = FrameLayout(this).apply {
-            setBackgroundColor(0xFFF2F2F2.toInt())
-            addView(TextView(context).apply {
-                text = "광고 영역"
-                gravity = Gravity.CENTER
-                setTextColor(Color.GRAY)
-            }, FrameLayout.LayoutParams(-1, -1))
-        }
+        adContainer = FrameLayout(this).apply { visibility = View.GONE }
         content.setPadding(gap * 2, gap, gap * 2, gap + adHeight + gap)
-        setContentView(FrameLayout(this).apply {
+        val root = FrameLayout(this)
+        // targetSdk 35+ 는 화면 전체(엣지 투 엣지)로 그려지므로 상태바/내비바 높이만큼 비워 둔다
+        root.setOnApplyWindowInsetsListener { v, insets -> applyInsets(v, insets) }
+        setContentView(root.apply {
             addView(content, FrameLayout.LayoutParams(-1, -1))
             addView(adContainer, FrameLayout.LayoutParams(-1, adHeight, Gravity.BOTTOM))
             addView(help, FrameLayout.LayoutParams(size, size, Gravity.TOP or Gravity.END).apply {
@@ -84,6 +92,37 @@ class MainActivity : Activity() {
         if (!getSharedPreferences("petpet", MODE_PRIVATE).getBoolean("intro_seen", false)) {
             showHelp(firstRun = true)
         }
+        initAds()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun applyInsets(v: View, insets: WindowInsets): WindowInsets {
+        v.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
+        return insets
+    }
+
+    /** EEA 등 동의가 필요한 지역은 동의 양식을 거친 뒤에만 광고를 요청한다 */
+    private fun initAds() {
+        val info = UserMessagingPlatform.getConsentInformation(this)
+        info.requestConsentInfoUpdate(this, ConsentRequestParameters.Builder().build(), {
+            UserMessagingPlatform.loadAndShowConsentFormIfRequired(this) { if (info.canRequestAds()) loadBanner() }
+        }, { if (info.canRequestAds()) loadBanner() })
+    }
+
+    private fun loadBanner() {
+        if (adView != null) return
+        MobileAds.initialize(this)
+        val view = AdView(this).apply {
+            setAdSize(AdSize.BANNER)
+            adUnitId = getString(R.string.admob_banner_id)
+            adListener = object : AdListener() {
+                override fun onAdLoaded() { adContainer.visibility = View.VISIBLE }
+                override fun onAdFailedToLoad(error: LoadAdError) { adContainer.visibility = View.GONE }
+            }
+        }
+        adContainer.addView(view, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        adView = view
+        view.loadAd(AdRequest.Builder().build())
     }
 
     /** 처음 실행 시 자동으로, 이후엔 "?" 버튼으로 표시되는 사용 안내 팝업 */
@@ -98,6 +137,9 @@ class MainActivity : Activity() {
                 "• 상단바를 내리면 petpet 상태 알림(실행 중/꺼짐)이 보여요. 누르면 이 앱으로 돌아오고, 앱의 done 버튼이나 알림의 done으로 끌 수 있어요.\n\n" +
                 "• 처음 한 번, 접근성 설정에서 petpet 서비스를 켜야 해요."
             )
+        builder.setNeutralButton("개인정보처리방침") { _, _ ->
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PRIVACY_URL)))
+        }
         if (firstRun) {
             builder.setCancelable(false).setPositiveButton("확인") { _, _ ->
                 getSharedPreferences("petpet", MODE_PRIVATE).edit().putBoolean("intro_seen", true).apply()
@@ -109,7 +151,13 @@ class MainActivity : Activity() {
         builder.show()
     }
 
+    override fun onDestroy() {
+        adView?.destroy()
+        super.onDestroy()
+    }
+
     override fun onPause() {
+        adView?.pause()
         resumed = false
         PetPetService.onStateChanged = null
         super.onPause()
@@ -118,6 +166,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         resumed = true
+        adView?.resume()
         PetPetService.instance?.hideOverlay()
         PetPetService.onStateChanged = { runOnUiThread { refresh() } }
         refresh()
@@ -169,5 +218,7 @@ class MainActivity : Activity() {
     companion object {
         /** petpet 앱 화면이 실제로 앞에 있는지 (서비스가 오버레이 내림 여부를 판단할 때 사용) */
         @Volatile var resumed = false
+        // GitHub Pages(저장소 Settings → Pages → main /docs)로 호스팅되는 개인정보처리방침
+        private const val PRIVACY_URL = "https://10000sun.github.io/petpetapp/privacy-policy.html"
     }
 }

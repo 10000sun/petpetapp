@@ -180,7 +180,7 @@ class PetPetService : AccessibilityService() {
         }, 40)
     }
 
-    class IconHit(val bounds: Rect, val isOwn: Boolean, val isWidget: Boolean = false)
+    class IconHit(val bounds: Rect, val isOwn: Boolean, val isWidget: Boolean = false, val label: String? = null)
 
     @Volatile private var worker: ExecutorService? = null
 
@@ -232,6 +232,19 @@ class PetPetService : AccessibilityService() {
         null
     }
 
+    /** 아이콘/위젯 노드에서 표시 이름을 얻는다 ("Gmail, 알림 1개" → "Gmail"). 못 찾으면 null */
+    private fun findLabel(n: AccessibilityNodeInfo, depth: Int): String? {
+        fun clean(cs: CharSequence?) = cs?.toString()?.substringBefore(',')?.trim()?.takeIf { it.isNotEmpty() }
+        clean(n.text)?.let { return it }
+        clean(n.contentDescription)?.let { return it }
+        if (depth == 0) return null
+        for (i in 0 until n.childCount) {
+            val c = try { n.getChild(i) } catch (e: Exception) { null } ?: continue
+            findLabel(c, depth - 1)?.let { return it }
+        }
+        return null
+    }
+
     private fun findHit(x: Float, y: Float): IconHit? {
         val root = rootInActiveWindow ?: return null
         // 런처/상단바가 아닌 창(예: 아직 전환 중인 petpet 앱 화면)을 기준으로 판단하면 엉뚱한 탭이 통과될 수 있으므로 무시
@@ -246,6 +259,9 @@ class PetPetService : AccessibilityService() {
         var icon: Rect? = null
         var widget: Rect? = null
         var bigLabeled: Rect? = null // 위젯 호스트 뷰가 노출되지 않는 런처용 보조 후보
+        var iconNode: AccessibilityNodeInfo? = null
+        var widgetNode: AccessibilityNodeInfo? = null
+        var bigNode: AccessibilityNodeInfo? = null
         var clickNode: AccessibilityNodeInfo? = null // 탭 위치를 포함하는 가장 작은 클릭 가능 노드
         var clickArea = Long.MAX_VALUE
 
@@ -262,13 +278,13 @@ class PetPetService : AccessibilityService() {
                 clickArea = area
             }
             if (n.className?.contains("AppWidgetHostView") == true) {
-                if (smaller(r, widget)) widget = r
+                if (smaller(r, widget)) { widget = r; widgetNode = n }
             } else if (clickable && r.width() in 1..maxW && r.height() in 1..maxH) {
-                if (smaller(r, icon)) icon = r
+                if (smaller(r, icon)) { icon = r; iconNode = n }
             } else if ((r.width() > maxW || r.height() > maxH) && area < screenArea / 2 &&
                 !(n.contentDescription.isNullOrBlank() && n.text.isNullOrBlank())
             ) {
-                if (smaller(r, bigLabeled)) bigLabeled = r
+                if (smaller(r, bigLabeled)) { bigLabeled = r; bigNode = n }
             }
             for (i in 0 until n.childCount) {
                 // 트리가 도중에 바뀌어 일부 노드가 무효해져도 나머지 탐색은 계속
@@ -278,11 +294,11 @@ class PetPetService : AccessibilityService() {
         }
         walk(root)
 
-        widget?.let { return IconHit(it, isOwn = false, isWidget = true) }
+        widget?.let { return IconHit(it, isOwn = false, isWidget = true, label = widgetNode?.let { n -> findLabel(n, 2) } ?: "위젯") }
         // 가장 작은 클릭 가능 노드(=실제로 눌린 항목)가 petpet 자신의 것일 때만 통과
         if (clickNode?.let { hasOwnLabel(it, 2) } == true) return IconHit(Rect(px, py, px, py), true)
-        if (icon == null) bigLabeled?.let { return IconHit(it, isOwn = false, isWidget = true) }
-        return icon?.let { IconHit(it, false) }
+        if (icon == null) bigLabeled?.let { return IconHit(it, isOwn = false, isWidget = true, label = bigNode?.let { n -> findLabel(n, 1) } ?: "위젯") }
+        return icon?.let { IconHit(it, false, label = iconNode?.let { n -> findLabel(n, 2) }) }
     }
 
     /** 상단바 알림: 현재 petpet 모드 상태를 보여주고, 누르면 petpet 앱으로 돌아간다. */

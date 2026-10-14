@@ -60,7 +60,10 @@ class PetOverlayView(private val service: PetPetService) : View(service) {
                         when {
                             hit == null -> Unit
                             hit.isOwn -> service.replay(x, y, x, y, 40)
-                            else -> pet(hit.bounds, hit.isWidget)
+                            else -> {
+                                PetStats.record(service, hit.label)
+                                pet(hit.bounds, hit.isWidget)
+                            }
                         }
                     }
                 }

@@ -25,6 +25,8 @@ import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
 import com.google.android.gms.ads.LoadAdError
 import com.google.android.gms.ads.MobileAds
+import com.google.android.gms.games.PlayGames
+import com.google.android.gms.games.leaderboard.LeaderboardVariant
 import com.google.android.ump.ConsentRequestParameters
 import com.google.android.ump.UserMessagingPlatform
 
@@ -36,6 +38,10 @@ class MainActivity : Activity() {
     private lateinit var statsList: TextView
     private lateinit var buyStatus: TextView
     private lateinit var buyButton: Button
+    private lateinit var rankStatus: TextView
+    private lateinit var rankMe: TextView
+    private lateinit var rankLogin: Button
+    private lateinit var rankShow: Button
     private lateinit var adContainer: FrameLayout
     private lateinit var billing: Billing
     private lateinit var panels: List<View>
@@ -97,6 +103,18 @@ class MainActivity : Activity() {
             })
         }
 
+        // 랭킹: Google 계정(Play 게임)으로 로그인해 총 쓰다듬은 횟수를 세계 리더보드에 올린다
+        rankStatus = label(15f)
+        rankMe = label(20f, bold = true)
+        rankLogin = button("Google 계정으로 로그인") {
+            PlayGames.getGamesSignInClient(this).signIn().addOnCompleteListener { refreshRanking() }
+        }
+        rankShow = button("🏆 세계 랭킹 보기") { showLeaderboard() }
+        val ranking = column(
+            rankStatus, rankMe, rankLogin, rankShow,
+            label(12f).apply { text = "랭킹에는 Play 게임 프로필 이름과 총 횟수가 공개돼요.\n점수는 앱을 열 때 갱신돼요." },
+        )
+
         // 설정: 커피 한 잔 후원(광고 제거), 방침, 도움말
         buyStatus = label(15f)
         buyButton = button("☕ 커피 한 잔 후원하고 광고 끄기") { billing.buy(this) }
@@ -109,8 +127,8 @@ class MainActivity : Activity() {
             label(12f).apply { text = "petpet v$version" },
         )
 
-        panels = listOf(home, stats, settings)
-        tabs = listOf("홈", "통계", "설정").mapIndexed { i, name -> button(name, 16f) { showTab(i) } }
+        panels = listOf(home, stats, ranking, settings)
+        tabs = listOf("홈", "통계", "랭킹", "설정").mapIndexed { i, name -> button(name, 16f) { showTab(i) } }
 
         // ── 광고 영역 ── 앱 화면 맨 아래에만 둔다 (오버레이/알림/다른 앱 위 금지, 버튼과 간격 유지).
         // 광고가 로드되기 전/실패/광고 제거 구매 시에는 숨긴다.
@@ -144,6 +162,7 @@ class MainActivity : Activity() {
         panels.forEachIndexed { idx, p -> p.visibility = if (idx == i) View.VISIBLE else View.GONE }
         tabs.forEachIndexed { idx, t -> t.isEnabled = idx != i }
         refresh()
+        if (i == RANKING_TAB) refreshRanking()
     }
 
     @Suppress("DEPRECATION")
@@ -218,6 +237,48 @@ class MainActivity : Activity() {
         buyButton.isEnabled = !removed && price != null
     }
 
+    // ── 랭킹 (Play 게임 서비스) ──
+
+    private val leaderboardId by lazy { getString(R.string.leaderboard_total_id) }
+
+    private fun refreshRanking() {
+        if (leaderboardId.startsWith("REPLACE")) { // 아직 Play Console에서 리더보드를 만들기 전
+            rankStatus.text = "랭킹을 준비 중이에요"
+            rankMe.text = ""
+            rankLogin.visibility = View.GONE
+            rankShow.isEnabled = false
+            return
+        }
+        PlayGames.getGamesSignInClient(this).isAuthenticated()
+            .addOnSuccessListener { onAuth(it.isAuthenticated) }
+            .addOnFailureListener { onAuth(false) }
+    }
+
+    private fun onAuth(signedIn: Boolean) {
+        rankLogin.visibility = if (signedIn) View.GONE else View.VISIBLE
+        rankShow.isEnabled = signedIn
+        if (!signedIn) {
+            rankStatus.text = "Google 계정으로 로그인하면 세계 랭킹에 참여할 수 있어요"
+            rankMe.text = ""
+            return
+        }
+        PlayGames.getPlayersClient(this).currentPlayer.addOnSuccessListener { rankStatus.text = "${it.displayName} 님으로 로그인됨" }
+        val total = PetStats.total(this)
+        val lb = PlayGames.getLeaderboardsClient(this)
+        // shortcut: 앱 화면이 열릴 때만 점수를 올림(쓰다듬는 중엔 호출 없음), 실시간 반영이 필요하면 서비스에서 주기적으로 제출
+        lb.submitScore(leaderboardId, total)
+        lb.loadCurrentPlayerLeaderboardScore(leaderboardId, LeaderboardVariant.TIME_SPAN_ALL_TIME, LeaderboardVariant.COLLECTION_PUBLIC)
+            .addOnSuccessListener { data ->
+                val s = data.get()
+                rankMe.text = if (s == null) "내 기록 ${total}회 (순위 집계 중)" else "내 순위 ${s.displayRank}위 · ${s.displayScore}회"
+            }
+    }
+
+    private fun showLeaderboard() {
+        PlayGames.getLeaderboardsClient(this).getLeaderboardIntent(leaderboardId)
+            .addOnSuccessListener { startActivityForResult(it, 9001) }
+    }
+
     /** 처음 실행 시 자동으로, 이후엔 "?"/설정의 도움말로 표시되는 사용 안내 팝업 */
     private fun showHelp(firstRun: Boolean) {
         val builder = AlertDialog.Builder(this)
@@ -228,7 +289,7 @@ class MainActivity : Activity() {
                 "• 스와이프(페이지 넘기기, 전체 앱 열기)는 그대로 동작해요.\n\n" +
                 "• petpet 앱 아이콘은 눌러도 정상 실행돼요.\n\n" +
                 "• 상단바를 내리면 petpet 상태 알림(실행 중/꺼짐)이 보여요. 누르면 이 앱으로 돌아오고, 앱의 done 버튼이나 알림의 done으로 끌 수 있어요.\n\n" +
-                "• 통계 탭에서 쓰다듬은 횟수와 앱 목록을, 설정 탭에서 커피 한 잔 후원(광고 제거)을 볼 수 있어요.\n\n" +
+                "• 통계 탭에서 쓰다듬은 횟수와 앱 목록을, 랭킹 탭에서 Google 로그인 후 세계 랭킹을, 설정 탭에서 커피 한 잔 후원(광고 제거)을 볼 수 있어요.\n\n" +
                 "• 처음 한 번, 접근성 설정에서 petpet 서비스를 켜야 해요."
             )
             .setNeutralButton("개인정보처리방침") { _, _ ->
@@ -266,6 +327,7 @@ class MainActivity : Activity() {
         PetPetService.onStateChanged = { runOnUiThread { refresh() } }
         billing.restore() // 구매 상태가 바뀌었을 수 있어(환불 등) 확인
         refresh()
+        refreshRanking() // 로그인 상태 확인 + 점수 제출
     }
 
     private fun startPetPet() {
@@ -305,6 +367,7 @@ class MainActivity : Activity() {
     companion object {
         /** petpet 앱 화면이 실제로 앞에 있는지 (서비스가 오버레이 내림 여부를 판단할 때 사용) */
         @Volatile var resumed = false
+        private const val RANKING_TAB = 2
         // GitHub Pages(저장소 Settings → Pages → main /docs)로 호스팅되는 개인정보처리방침
         private const val PRIVACY_URL = "https://10000sun.github.io/petpetapp/privacy-policy.html"
     }

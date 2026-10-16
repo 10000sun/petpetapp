@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Play Console → Play 게임 서비스 → 구성 에서 발급받은 값으로 교체 (숫자 프로젝트 ID / 리더보드 ID) -->
+    <string name="game_services_project_id" translatable="false">000000000000</string>
+    <string name="leaderboard_total_id" translatable="false">REPLACE_WITH_LEADERBOARD_ID</string>
+</resources>

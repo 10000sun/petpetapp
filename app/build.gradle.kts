@@ -52,6 +52,8 @@ android {
 dependencies {
     // AdMob 배너 + 동의 양식(UMP, 의존성으로 포함됨). 출시 전 strings의 테스트 ID를 실제 ID로 교체
     implementation("com.google.android.gms:play-services-ads:23.6.0")
+    // Google 계정 로그인 + 세계 랭킹(Play 게임 서비스 리더보드)
+    implementation("com.google.android.gms:play-services-games-v2:21.0.0")
     // 인앱 결제(커피 후원 = 광고 제거). 7.x API 기준 — Play 정책상 더 높은 버전이 요구되면 올리고 listener 시그니처 확인
     implementation("com.android.billingclient:billing:7.1.1")
 }
